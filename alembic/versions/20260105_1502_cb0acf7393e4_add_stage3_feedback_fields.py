@@ -23,7 +23,7 @@ def upgrade() -> None:
     op.add_column('feedback', sa.Column('soreness_0_3', sa.Integer(), nullable=True))
     op.add_column('feedback', sa.Column('pain_locations', sa.JSON(), nullable=True))
     op.add_column('feedback', sa.Column('feedback_date', sa.Date(), nullable=True))
-    op.add_column('feedback', sa.Column('is_morning_prompt', sa.Boolean(), nullable=False, server_default=sa.text('0')))
+    op.add_column('feedback', sa.Column('is_morning_prompt', sa.Boolean(), nullable=False, server_default=sa.text('false')))
     
     # Note: SQLite doesn't support adding constraints with ALTER TABLE
     # The unique constraint is enforced at the application level for SQLite
