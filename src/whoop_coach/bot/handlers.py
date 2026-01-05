@@ -122,6 +122,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "📋 *Команды:*\n\n"
         "/start — начать\n"
         "/whoop — подключить WHOOP\n"
+        "/disconnect — отключить WHOOP\n"
         "/last — последние данные\n"
         "/gear — выбрать инвентарь\n"
         "/plan — план на сегодня\n"
@@ -129,6 +130,32 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/help — эта справка",
         parse_mode="Markdown",
     )
+
+
+async def disconnect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /disconnect command — clear WHOOP tokens."""
+    if not update.effective_user or not update.message:
+        return
+
+    telegram_id = update.effective_user.id
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = result.scalar_one_or_none()
+            if user and user.whoop_tokens_enc:
+                user.whoop_tokens_enc = None
+                user.whoop_user_id = None
+                await update.message.reply_text(
+                    "✅ WHOOP отключен.\n\n"
+                    "Используй /whoop для повторного подключения."
+                )
+            else:
+                await update.message.reply_text(
+                    "ℹ️ WHOOP не был подключен."
+                )
 
 
 async def gear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

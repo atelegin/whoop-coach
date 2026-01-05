@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 
 from whoop_coach.bot.handlers import (
+    disconnect_command,
     gear_callback,
     gear_command,
     help_command,
@@ -48,6 +49,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("gear", gear_command))
     application.add_handler(CommandHandler("plan", plan_command))
     application.add_handler(CommandHandler("whoop", whoop_command))
+    application.add_handler(CommandHandler("disconnect", disconnect_command))
     application.add_handler(CommandHandler("last", last_command))
     application.add_handler(CommandHandler("retry", retry_command))
     application.add_handler(CommandHandler("undo", undo_command))
