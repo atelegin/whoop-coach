@@ -15,7 +15,10 @@ from whoop_coach.bot.keyboards import (
     PAIN_LOCATIONS,
     equipment_keyboard,
     gear_with_swing_keyboard,
+    kb_used_done_keyboard,
+    kb_used_keyboard,
     kb_weight_keyboard,
+    movement_tags_keyboard,
     pain_locations_keyboard,
     retry_keyboard,
     rpe_keyboard,
@@ -37,6 +40,7 @@ from whoop_coach.db.session import async_session_factory
 from whoop_coach.matching import match_workout
 from whoop_coach.whoop.client import WhoopClient
 from whoop_coach.youtube import parse_youtube_url
+from whoop_coach.videos.service import upsert_video, get_last_used_video
 
 import httpx
 
@@ -436,11 +440,15 @@ async def youtube_message_handler(
                 )
                 return
 
-            # Upsert Video (insert on conflict do nothing)
-            existing_video = await session.get(Video, video_id)
-            if not existing_video:
-                session.add(Video(video_id=video_id))
-                await session.flush()
+            # Upsert Video with usage tracking
+            video = await upsert_video(session, video_id)
+
+            # Capture KB caps for prompt
+            now = datetime.now(timezone.utc)
+            should_prompt_kb = (
+                user.equipment_profile == EquipmentProfile.HOME_FULL
+                and kb_weight is None
+            )
 
             # Create PendingLog with KB cap snapshots
             pending_log = PendingLog(
@@ -450,10 +458,12 @@ async def youtube_message_handler(
                 equipment_profile_at_time=user.equipment_profile,
                 message_timestamp=message_time,
                 state=PendingLogState.PENDING,
-                # KB capability snapshots
+                # KB capability snapshots (copied from user defaults)
                 kb_overhead_max_kg_at_time=user.kb_overhead_max_kg,
                 kb_heavy_kg_at_time=user.kb_heavy_kg,
                 kb_swing_kg_at_time=user.kb_swing_kg,
+                # Set prompt timestamp if we will ask
+                kb_used_prompt_sent_at=now if should_prompt_kb else None,
             )
             session.add(pending_log)
             await session.flush()
@@ -461,12 +471,15 @@ async def youtube_message_handler(
             user_id = user.id
             equipment = user.equipment_profile
             tokens_enc = user.whoop_tokens_enc
+            heavy_kg = user.kb_heavy_kg
+            swing_kg = user.kb_swing_kg
 
-    # If kettlebell video without weight and home mode, ask for weight
+    # Send kb_used prompt AFTER commit (ensures idempotency if send fails)
     if kb_weight is None and equipment == EquipmentProfile.HOME_FULL:
-        # For MVP, always ask for weight if not specified (can refine later)
-        # We'll proceed to matching, but ask for weight first if needed
-        pass  # Continue to matching for now
+        await update.message.reply_text(
+            "Записал. Какие веса использовал в этот раз?",
+            reply_markup=kb_used_keyboard(log_id, heavy_kg, swing_kg),
+        )
 
     # Fetch workouts with auto-refresh on 401
     try:
@@ -618,6 +631,127 @@ async def kb_weight_callback(
             pending_log.kb_weight_kg = weight
 
     await query.edit_message_text(f"✅ Вес: {weight} кг")
+
+
+# === Stage 5: KB Used Callbacks ===
+
+# Two explicit patterns for cleaner validation (per user feedback)
+import re
+_KB_USED_WEIGHT_PATTERN = re.compile(r"^kb_used:([0-9a-f-]+):(heavy|swing):(12|20)$")
+_KB_USED_ACTION_PATTERN = re.compile(r"^kb_used:([0-9a-f-]+):(keep|skip|done)$")
+
+
+async def kb_used_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle KB used session weights: kb_used:{log_id}:{action}:{value?}.
+    
+    Patterns:
+        kb_used:{log_id}:heavy:12|20
+        kb_used:{log_id}:swing:12|20
+        kb_used:{log_id}:keep
+        kb_used:{log_id}:skip
+        kb_used:{log_id}:done
+    """
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    data = query.data
+    
+    # Match weight pattern: heavy/swing with 12|20
+    weight_match = _KB_USED_WEIGHT_PATTERN.match(data)
+    if weight_match:
+        log_id = weight_match.group(1)
+        weight_type = weight_match.group(2)  # "heavy" or "swing"
+        weight_value = int(weight_match.group(3))
+        
+        await query.answer(f"{'База' if weight_type == 'heavy' else 'Свинг'}: {weight_value} кг")
+        
+        async with async_session_factory() as session:
+            async with session.begin():
+                pending_log = await session.get(PendingLog, uuid.UUID(log_id))
+                if not pending_log:
+                    await query.edit_message_text("❌ Лог не найден")
+                    return
+                
+                # Check if already answered
+                if pending_log.kb_used_answered_at:
+                    await query.answer("Уже сохранено", show_alert=False)
+                    return
+                
+                # Update the appropriate weight
+                if weight_type == "heavy":
+                    pending_log.kb_heavy_kg_at_time = weight_value
+                else:
+                    pending_log.kb_swing_kg_at_time = weight_value
+                
+                # Get current values for UI
+                heavy_kg = pending_log.kb_heavy_kg_at_time or 20
+                swing_kg = pending_log.kb_swing_kg_at_time or 12
+        
+        # Edit message with current selection + Готово button
+        await query.edit_message_text(
+            f"Принято: база {heavy_kg} кг, свинг {swing_kg} кг.",
+            reply_markup=kb_used_done_keyboard(log_id, heavy_kg, swing_kg),
+        )
+        return
+    
+    # Match action pattern: keep/skip/done
+    action_match = _KB_USED_ACTION_PATTERN.match(data)
+    if action_match:
+        log_id = action_match.group(1)
+        action = action_match.group(2)
+        
+        async with async_session_factory() as session:
+            async with session.begin():
+                pending_log = await session.get(PendingLog, uuid.UUID(log_id))
+                if not pending_log:
+                    await query.answer("Лог не найден", show_alert=True)
+                    return
+                
+                # Check if already answered
+                if pending_log.kb_used_answered_at:
+                    await query.answer("Уже сохранено", show_alert=False)
+                    return
+                
+                now = datetime.now(timezone.utc)
+                
+                if action == "keep":
+                    # Reset to user defaults
+                    user = await session.get(User, pending_log.user_id)
+                    if user:
+                        pending_log.kb_heavy_kg_at_time = user.kb_heavy_kg
+                        pending_log.kb_swing_kg_at_time = user.kb_swing_kg
+                    pending_log.kb_used_answered_at = now
+                    await query.answer("Как в /gear")
+                    await query.edit_message_text(
+                        "✅ Оставили веса из /gear."
+                    )
+                
+                elif action == "skip":
+                    # Just finalize without changes
+                    pending_log.kb_used_answered_at = now
+                    await query.answer("Пропущено")
+                    await query.edit_message_text(
+                        "⏭️ Пропустили выбор весов."
+                    )
+                
+                elif action == "done":
+                    # Finalize current selection
+                    pending_log.kb_used_answered_at = now
+                    heavy_kg = pending_log.kb_heavy_kg_at_time or 20
+                    swing_kg = pending_log.kb_swing_kg_at_time or 12
+                    await query.answer("Сохранено!")
+                    await query.edit_message_text(
+                        f"✅ Сохранено: база {heavy_kg} кг, свинг {swing_kg} кг."
+                    )
+        return
+    
+    # Unknown pattern
+    await query.answer("Неизвестная команда", show_alert=True)
+
+
 
 
 async def retry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1147,3 +1281,162 @@ async def unattributed_rpe_callback(update: Update, context: ContextTypes.DEFAUL
         f"✅ Записано! RPE: {rpe_value} {emoji}\n\n"
         "Спасибо за фидбек!"
     )
+
+
+# === Stage 5: Video Tagging Commands & Callbacks ===
+
+async def tag_last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tag_last — open tagging UI for most recently used video."""
+    if not update.effective_user or not update.message:
+        return
+
+    telegram_id = update.effective_user.id
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            user = await get_or_create_user(session, telegram_id)
+            video = await get_last_used_video(session, user.id)
+            
+            if not video:
+                await update.message.reply_text(
+                    "🤷 Нет залогированных видео для разметки."
+                )
+                return
+            
+            video_id = video.video_id
+            current_tags = set(video.movement_tags) if video.movement_tags else set()
+
+    await update.message.reply_text(
+        f"🏷️ Разметить видео `{video_id}`:\n\n"
+        "Выбери паттерны движений:",
+        parse_mode="Markdown",
+        reply_markup=movement_tags_keyboard(video_id, current_tags),
+    )
+
+
+async def video_last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/video_last — show last video info + tags + usage_count."""
+    if not update.effective_user or not update.message:
+        return
+
+    telegram_id = update.effective_user.id
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            user = await get_or_create_user(session, telegram_id)
+            video = await get_last_used_video(session, user.id)
+            
+            if not video:
+                await update.message.reply_text(
+                    "🤷 Нет залогированных видео."
+                )
+                return
+            
+            video_id = video.video_id
+            tags = video.movement_tags if video.movement_tags else []
+            usage_count = video.usage_count
+            last_used = video.last_used_at
+            title = video.title or "—"
+
+    tags_str = ", ".join(tags) if tags else "не размечено"
+    last_used_str = last_used.strftime("%d.%m %H:%M") if last_used else "—"
+    
+    await update.message.reply_text(
+        f"📹 *Последнее видео*\n\n"
+        f"ID: `{video_id}`\n"
+        f"Название: {title}\n"
+        f"🔖 Теги: {tags_str}\n"
+        f"📊 Использований: {usage_count}\n"
+        f"🕐 Последнее: {last_used_str}\n\n"
+        f"[Открыть на YouTube](https://www.youtube.com/watch?v={video_id})",
+        parse_mode="Markdown",
+    )
+
+
+# Tag toggle pattern: tag:{video_id}:{tag}
+_TAG_TOGGLE_PATTERN = re.compile(r"^tag:([a-zA-Z0-9_-]+):([a-z]+)$")
+
+
+async def tag_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle tag toggle: tag:{video_id}:{tag}."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    match = _TAG_TOGGLE_PATTERN.match(query.data)
+    if not match:
+        return
+
+    video_id = match.group(1)
+    tag = match.group(2)
+
+    await query.answer(tag)
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            video = await session.get(Video, video_id)
+            if not video:
+                await query.edit_message_text("❌ Видео не найдено")
+                return
+            
+            # Toggle tag in list
+            current_tags = set(video.movement_tags) if video.movement_tags else set()
+            if tag in current_tags:
+                current_tags.remove(tag)
+            else:
+                current_tags.add(tag)
+            
+            video.movement_tags = list(current_tags)
+
+    # Edit message with updated keyboard
+    tags_str = ", ".join(sorted(current_tags)) if current_tags else "—"
+    await query.edit_message_text(
+        f"🏷️ Разметить видео `{video_id}`:\n\n"
+        f"Текущие теги: {tags_str}",
+        parse_mode="Markdown",
+        reply_markup=movement_tags_keyboard(video_id, current_tags),
+    )
+
+
+async def tag_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle tag done: tag_done:{video_id}."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 2 or parts[0] != "tag_done":
+        return
+
+    video_id = parts[1]
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            video = await session.get(Video, video_id)
+            if not video:
+                await query.answer("Видео не найдено", show_alert=True)
+                return
+            
+            tags = video.movement_tags if video.movement_tags else []
+
+    tags_str = ", ".join(tags) if tags else "не размечено"
+    await query.answer("Сохранено!")
+    await query.edit_message_text(
+        f"✅ Разметка сохранена!\n\n"
+        f"Теги: {tags_str}"
+    )
+
+
+async def tag_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle tag skip: tag_skip:{video_id}."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    parts = query.data.split(":")
+    if len(parts) != 2 or parts[0] != "tag_skip":
+        return
+
+    await query.answer("Пропущено")
+    await query.edit_message_text("⏭️ Разметка пропущена.")
+

@@ -14,6 +14,7 @@ from whoop_coach.bot.handlers import (
     gear_command,
     help_command,
     kb_swing_callback,
+    kb_used_callback,
     kb_weight_callback,
     last_command,
     morning_command,
@@ -25,8 +26,13 @@ from whoop_coach.bot.handlers import (
     rpe_callback,
     soreness_callback,
     start_command,
+    tag_done_callback,
+    tag_last_command,
+    tag_skip_callback,
+    tag_toggle_callback,
     unattributed_rpe_callback,
     undo_command,
+    video_last_command,
     whoop_command,
     workout_select_callback,
     youtube_message_handler,
@@ -88,6 +94,22 @@ def create_bot() -> Application:
     application.add_handler(
         CallbackQueryHandler(unattributed_rpe_callback, pattern=r"^unattr_rpe:")
     )
+    # Stage 5: KB Used + Tagging callbacks
+    application.add_handler(
+        CallbackQueryHandler(kb_used_callback, pattern=r"^kb_used:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(tag_toggle_callback, pattern=r"^tag:[a-zA-Z0-9_-]+:[a-z]+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(tag_done_callback, pattern=r"^tag_done:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(tag_skip_callback, pattern=r"^tag_skip:")
+    )
+    # Stage 5 commands
+    application.add_handler(CommandHandler("tag_last", tag_last_command))
+    application.add_handler(CommandHandler("video_last", video_last_command))
 
     # Register message handler for YouTube URLs (must be last)
     application.add_handler(

@@ -224,3 +224,147 @@ def unattributed_rpe_keyboard(workout_id: str) -> InlineKeyboardMarkup:
         for i in range(1, 6)
     ]
     return InlineKeyboardMarkup([buttons])
+
+
+# === Stage 5: KB Used + Tagging Keyboards ===
+
+# Movement tags for tagging workflow
+MOVEMENT_TAGS = ["overhead", "swing", "squat", "carry", "pull"]
+
+
+def kb_used_keyboard(
+    log_id: str, heavy_kg: int = 20, swing_kg: int = 12
+) -> InlineKeyboardMarkup:
+    """Build keyboard for session KB weight selection.
+
+    Args:
+        log_id: PendingLog UUID as string
+        heavy_kg: Current heavy weight selection (for ✓)
+        swing_kg: Current swing weight selection (for ✓)
+
+    Callback format: kb_used:{log_id}:(heavy|swing):(12|20)
+                     kb_used:{log_id}:(keep|skip)
+    """
+    # Row 1: Heavy (pull/squat/carry) weight
+    heavy_row = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if heavy_kg == 12 else ''}База: 12 кг",
+            callback_data=f"kb_used:{log_id}:heavy:12",
+        ),
+        InlineKeyboardButton(
+            text=f"{'✓ ' if heavy_kg == 20 else ''}База: 20 кг",
+            callback_data=f"kb_used:{log_id}:heavy:20",
+        ),
+    ]
+    # Row 2: Swing weight
+    swing_row = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if swing_kg == 12 else ''}Свинг: 12 кг",
+            callback_data=f"kb_used:{log_id}:swing:12",
+        ),
+        InlineKeyboardButton(
+            text=f"{'✓ ' if swing_kg == 20 else ''}Свинг: 20 кг",
+            callback_data=f"kb_used:{log_id}:swing:20",
+        ),
+    ]
+    # Row 3: Utilities
+    util_row = [
+        InlineKeyboardButton(
+            text="Как в /gear",
+            callback_data=f"kb_used:{log_id}:keep",
+        ),
+        InlineKeyboardButton(
+            text="Пропустить",
+            callback_data=f"kb_used:{log_id}:skip",
+        ),
+    ]
+    return InlineKeyboardMarkup([heavy_row, swing_row, util_row])
+
+
+def kb_used_done_keyboard(
+    log_id: str, heavy_kg: int, swing_kg: int
+) -> InlineKeyboardMarkup:
+    """Build keyboard with current selections and Готово button.
+
+    Args:
+        log_id: PendingLog UUID as string
+        heavy_kg: Current heavy weight selection
+        swing_kg: Current swing weight selection
+    """
+    # Row 1: Heavy (pull/squat/carry) weight
+    heavy_row = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if heavy_kg == 12 else ''}База: 12 кг",
+            callback_data=f"kb_used:{log_id}:heavy:12",
+        ),
+        InlineKeyboardButton(
+            text=f"{'✓ ' if heavy_kg == 20 else ''}База: 20 кг",
+            callback_data=f"kb_used:{log_id}:heavy:20",
+        ),
+    ]
+    # Row 2: Swing weight
+    swing_row = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if swing_kg == 12 else ''}Свинг: 12 кг",
+            callback_data=f"kb_used:{log_id}:swing:12",
+        ),
+        InlineKeyboardButton(
+            text=f"{'✓ ' if swing_kg == 20 else ''}Свинг: 20 кг",
+            callback_data=f"kb_used:{log_id}:swing:20",
+        ),
+    ]
+    # Row 3: Done button
+    done_row = [
+        InlineKeyboardButton(
+            text="✅ Готово",
+            callback_data=f"kb_used:{log_id}:done",
+        ),
+    ]
+    return InlineKeyboardMarkup([heavy_row, swing_row, done_row])
+
+
+def movement_tags_keyboard(
+    video_id: str, selected: set[str] | None = None
+) -> InlineKeyboardMarkup:
+    """Build movement tags toggle keyboard for video tagging.
+
+    Args:
+        video_id: YouTube video ID
+        selected: Currently selected tags
+
+    Callback format: tag:{video_id}:{tag}
+                     tag_done:{video_id}
+                     tag_skip:{video_id}
+    """
+    if selected is None:
+        selected = set()
+
+    # Row 1: overhead, swing, squat
+    row1 = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if tag in selected else ''}{tag}",
+            callback_data=f"tag:{video_id}:{tag}",
+        )
+        for tag in ["overhead", "swing", "squat"]
+    ]
+    # Row 2: carry, pull
+    row2 = [
+        InlineKeyboardButton(
+            text=f"{'✓ ' if tag in selected else ''}{tag}",
+            callback_data=f"tag:{video_id}:{tag}",
+        )
+        for tag in ["carry", "pull"]
+    ]
+    # Row 3: Done / Skip
+    row3 = [
+        InlineKeyboardButton(
+            text="✅ Готово",
+            callback_data=f"tag_done:{video_id}",
+        ),
+        InlineKeyboardButton(
+            text="Пропустить",
+            callback_data=f"tag_skip:{video_id}",
+        ),
+    ]
+    return InlineKeyboardMarkup([row1, row2, row3])
+

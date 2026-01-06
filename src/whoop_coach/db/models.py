@@ -177,6 +177,22 @@ class Video(Base):
         default=list,
         nullable=False,
     )
+    # Usage tracking
+    usage_count: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -248,6 +264,15 @@ class PendingLog(Base):
     )
     kb_swing_kg_at_time: Mapped[int | None] = mapped_column(
         Integer,
+        nullable=True,
+    )
+    # KB used prompt state
+    kb_used_prompt_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    kb_used_answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
