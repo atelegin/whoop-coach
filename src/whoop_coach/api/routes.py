@@ -201,15 +201,14 @@ async def whoop_webhook(
     
     settings = get_settings()
     
-    # Signature verification: required in prod, optional in dev
-    if settings.is_prod:
-        if not verify_whoop_signature(body, sig, ts):
-            raise HTTPException(401, "Invalid signature")
-    elif sig and ts:
-        # Dev mode with signature provided: still verify
-        if not verify_whoop_signature(body, sig, ts):
-            raise HTTPException(401, "Invalid signature")
-    # Dev mode without signature: allow (for dashboard test webhooks)
+    # Signature verification: skip if secret not configured
+    if settings.WHOOP_WEBHOOK_SECRET:
+        if sig and ts:
+            if not verify_whoop_signature(body, sig, ts):
+                raise HTTPException(401, "Invalid signature")
+        elif settings.is_prod:
+            # Prod mode requires signature when secret is set
+            raise HTTPException(401, "Missing signature headers")
     
     payload = json.loads(body)
     event_type = payload.get("type")
