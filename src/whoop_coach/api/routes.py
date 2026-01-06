@@ -30,23 +30,23 @@ WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300
 def verify_whoop_signature(body: bytes, sig: str, ts: str) -> bool:
     """Verify WHOOP webhook HMAC-SHA256 signature.
     
-    Format: signed_payload = "{timestamp}.{body}"
-    Signature = base64(hmac_sha256(secret, signed_payload))
+    Per WHOOP docs: signature = base64(HMAC-SHA256(timestamp + body, secret))
     """
     settings = get_settings()
     if not settings.WHOOP_WEBHOOK_SECRET:
         return False
     
-    # Check timestamp freshness
+    # Check timestamp freshness (ts is in milliseconds)
     try:
         ts_int = int(ts)
-        if abs(time.time() - ts_int) > WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:
+        # Convert to seconds for comparison
+        if abs(time.time() * 1000 - ts_int) > WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS * 1000:
             return False
     except (ValueError, TypeError):
         return False
     
-    # Compute expected signature
-    signed_payload = f"{ts}.".encode() + body
+    # Compute expected signature: timestamp (as string) + body (no separator)
+    signed_payload = ts.encode() + body
     expected = hmac.new(
         settings.WHOOP_WEBHOOK_SECRET.encode(),
         signed_payload,
