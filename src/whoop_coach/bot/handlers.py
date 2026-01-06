@@ -262,6 +262,7 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         async with session.begin():
             user = await get_or_create_user(session, telegram_id)
             tokens_enc = user.whoop_tokens_enc
+            user_id = user.id
 
     if not tokens_enc:
         await update.message.reply_text(
@@ -271,13 +272,10 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # Decrypt tokens
-    tokens = decrypt_tokens(tokens_enc)
-    access_token = tokens.get("access_token")
-
-    # Fetch data from WHOOP
-    client = WhoopClient(access_token=access_token)
+    # Fetch data from WHOOP with auto token refresh
     try:
+        client, tokens_refreshed = await get_whoop_client_with_refresh(user_id, tokens_enc)
+        
         # Get current cycle
         cycles = await client.get_cycles(limit=1)
         cycle = cycles[0] if cycles else None
@@ -292,6 +290,13 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Get recent workouts
         workouts = await client.get_workouts(limit=3)
 
+    except ValueError as e:
+        # Token refresh failed — need to re-auth
+        await update.message.reply_text(
+            f"⚠️ Токен истёк и не удалось обновить.\n\n"
+            "Используй /disconnect затем /whoop для переподключения.",
+        )
+        return
     except Exception as e:
         await update.message.reply_text(
             f"❌ Ошибка при получении данных: {e}\n\n"
@@ -299,7 +304,8 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
     finally:
-        await client.close()
+        if 'client' in locals():
+            await client.close()
 
     # Format response
     lines = ["📊 *Последние данные WHOOP*\n"]
