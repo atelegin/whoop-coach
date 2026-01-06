@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -272,6 +273,35 @@ class PendingLog(Base):
         nullable=True,
     )
     kb_used_answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # WHOOP workout snapshot (persisted on match)
+    whoop_workout_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    whoop_workout_type: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    whoop_duration_s: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    whoop_strain: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    whoop_hr_avg: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    whoop_hr_max: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    matched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

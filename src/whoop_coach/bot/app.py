@@ -21,6 +21,7 @@ from whoop_coach.bot.handlers import (
     pain_done_callback,
     pain_location_callback,
     plan_command,
+    profile_command,
     retry_callback,
     retry_command,
     rpe_callback,
@@ -61,6 +62,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("retry", retry_command))
     application.add_handler(CommandHandler("undo", undo_command))
     application.add_handler(CommandHandler("morning", morning_command))
+    application.add_handler(CommandHandler("profile", profile_command))
 
     # Register callback handlers
     application.add_handler(

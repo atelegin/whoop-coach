@@ -1,9 +1,12 @@
 """Telegram bot command and callback handlers."""
 
+import logging
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,10 +40,21 @@ from whoop_coach.db.models import (
     Video,
 )
 from whoop_coach.db.session import async_session_factory
-from whoop_coach.matching import match_workout
+from whoop_coach.matching import MatchCandidate, match_workout
 from whoop_coach.whoop.client import WhoopClient
 from whoop_coach.youtube import parse_youtube_url
-from whoop_coach.videos.service import upsert_video, get_last_used_video
+from whoop_coach.videos.service import (
+    upsert_video,
+    get_last_used_video,
+    get_last_video_log,
+    get_video_strain_aggregates_by_profile,
+    get_video_effort_aggregates_by_profile,
+    get_video_overall_aggregates,
+    profile_key,
+    format_session_metrics,
+    rpe_mean_to_words,
+    escape_html,
+)
 
 import httpx
 
@@ -136,14 +150,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.message.reply_text(
         "📋 *Команды:*\n\n"
+        "*Основные:*\n"
         "/start — начать\n"
         "/whoop — подключить WHOOP\n"
         "/disconnect — отключить WHOOP\n"
-        "/last — последние данные\n"
+        "/last — последние данные WHOOP\n"
+        "/help — эта справка\n\n"
+        "*Тренировки:*\n"
         "/gear — выбрать инвентарь\n"
+        "/profile — установить веса (H/S)\n"
         "/plan — план на сегодня\n"
         "/morning — утренний опрос\n"
-        "/help — эта справка",
+        "/retry — повторить матчинг\n\n"
+        "*Видео:*\n"
+        "/video\\_last — инфо о последнем видео\n"
+        "/video\\_tag *ID* — разметить теги\n\n"
+        "*Логирование:*\n"
+        "Отправь YouTube URL (с опц. весом):\n"
+        "`https://youtube.com/... 20kg`",
         parse_mode="Markdown",
     )
 
@@ -172,6 +196,52 @@ async def disconnect_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(
                     "ℹ️ WHOOP не был подключен."
                 )
+
+
+async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/profile [heavy] [swing] — показать или установить веса KB."""
+    if not update.effective_user or not update.message:
+        return
+
+    telegram_id = update.effective_user.id
+    args = context.args or []
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            user = await get_or_create_user(session, telegram_id)
+            
+            if len(args) == 0:
+                # Show current profile
+                await update.message.reply_text(
+                    f"🏋️ *Текущий профиль:*\n\n"
+                    f"База (heavy): {user.kb_heavy_kg} кг\n"
+                    f"Свинг (swing): {user.kb_swing_kg} кг\n"
+                    f"Overhead max: {user.kb_overhead_max_kg} кг\n\n"
+                    f"Чтобы изменить: `/profile 20 12`\n"
+                    f"(первое — база, второе — свинг)",
+                    parse_mode="Markdown",
+                )
+                return
+            
+            if len(args) == 2:
+                try:
+                    heavy = int(args[0])
+                    swing = int(args[1])
+                    user.kb_heavy_kg = heavy
+                    user.kb_swing_kg = swing
+                    await update.message.reply_text(
+                        f"✅ Профиль обновлён:\n"
+                        f"База: {heavy} кг\n"
+                        f"Свинг: {swing} кг",
+                    )
+                    return
+                except ValueError:
+                    pass
+            
+            await update.message.reply_text(
+                "❌ Формат: `/profile 20 12`\n(база, свинг в кг)",
+                parse_mode="Markdown",
+            )
 
 
 async def gear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -396,6 +466,21 @@ async def last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 # === Stage 2: Video Logging + Workout Matching ===
 
+
+def _persist_whoop_snapshot(
+    pending_log: PendingLog,
+    candidate: MatchCandidate,
+) -> None:
+    """Persist WHOOP workout snapshot into PendingLog."""
+    pending_log.whoop_workout_id = candidate.workout_id
+    pending_log.whoop_workout_type = candidate.workout_type
+    pending_log.whoop_duration_s = candidate.duration_min * 60
+    pending_log.whoop_strain = candidate.strain if candidate.strain else None
+    pending_log.whoop_hr_avg = candidate.hr_avg
+    pending_log.whoop_hr_max = candidate.hr_max
+    pending_log.matched_at = datetime.now(timezone.utc)
+
+
 # Regex to parse YouTube URL + optional weight: "URL" or "URL 12kg"
 _WEIGHT_PATTERN = re.compile(r"\b(\d{1,2})\s*(?:kg|кг)\b", re.IGNORECASE)
 
@@ -513,6 +598,7 @@ async def youtube_message_handler(
                 if pending_log:
                     pending_log.matched_workout_id = candidate.workout_id
                     pending_log.state = PendingLogState.MATCHED
+                    _persist_whoop_snapshot(pending_log, candidate)
 
         time_str = candidate.end.strftime("%H:%M")
         await update.message.reply_text(
@@ -554,8 +640,55 @@ async def workout_select_callback(
                 await query.edit_message_text("❌ Лог не найден")
                 return
 
-            pending_log.matched_workout_id = workout_id
-            pending_log.state = PendingLogState.MATCHED
+            # Get user tokens for WHOOP fetch
+            result = await session.execute(
+                select(User).where(User.id == pending_log.user_id)
+            )
+            user = result.scalar_one_or_none()
+            if not user or not user.whoop_tokens_enc:
+                # Still set match, just skip snapshot
+                pending_log.matched_workout_id = workout_id
+                pending_log.state = PendingLogState.MATCHED
+                pending_log.matched_at = datetime.now(timezone.utc)
+            else:
+                # Fetch workout to get full data for snapshot
+                tokens_enc = user.whoop_tokens_enc
+                user_id = user.id
+
+    # Fetch workout data for snapshot (outside transaction)
+    if user and user.whoop_tokens_enc:
+        try:
+            client, _ = await get_whoop_client_with_refresh(user_id, tokens_enc)
+            workouts = await client.get_workouts(limit=25)
+            await client.close()
+
+            # Find matching workout
+            candidate = None
+            for w in workouts:
+                c = MatchCandidate.from_whoop_workout(w)
+                if c.workout_id == workout_id:
+                    candidate = c
+                    break
+
+            async with async_session_factory() as session:
+                async with session.begin():
+                    pending_log = await session.get(PendingLog, uuid.UUID(log_id))
+                    if pending_log:
+                        pending_log.matched_workout_id = workout_id
+                        pending_log.state = PendingLogState.MATCHED
+                        if candidate:
+                            _persist_whoop_snapshot(pending_log, candidate)
+                        else:
+                            pending_log.matched_at = datetime.now(timezone.utc)
+        except Exception:
+            # On error, still mark as matched but skip snapshot
+            async with async_session_factory() as session:
+                async with session.begin():
+                    pending_log = await session.get(PendingLog, uuid.UUID(log_id))
+                    if pending_log:
+                        pending_log.matched_workout_id = workout_id
+                        pending_log.state = PendingLogState.MATCHED
+                        pending_log.matched_at = datetime.now(timezone.utc)
 
     await query.edit_message_text(
         "✅ Тренировка выбрана!\n\nОцени нагрузку:",
@@ -818,6 +951,7 @@ async def retry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if pending_log:
                     pending_log.matched_workout_id = candidate.workout_id
                     pending_log.state = PendingLogState.MATCHED
+                    _persist_whoop_snapshot(pending_log, candidate)
 
         await query.edit_message_text(
             f"✅ Нашёл: {candidate.end.strftime('%H:%M')} ({candidate.duration_min} мин)\n\n"
@@ -908,6 +1042,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 if pl:
                     pl.matched_workout_id = candidate.workout_id
                     pl.state = PendingLogState.MATCHED
+                    _persist_whoop_snapshot(pl, candidate)
 
         await update.message.reply_text(
             f"✅ Нашёл: {candidate.end.strftime('%H:%M')} ({candidate.duration_min} мин)\n\n"
@@ -1315,42 +1450,93 @@ async def tag_last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def video_last_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/video_last — show last video info + tags + usage_count."""
+    """/video_last — show last video info + session metrics + profile aggregates."""
     if not update.effective_user or not update.message:
         return
 
     telegram_id = update.effective_user.id
 
-    async with async_session_factory() as session:
-        async with session.begin():
-            user = await get_or_create_user(session, telegram_id)
-            video = await get_last_used_video(session, user.id)
-            
-            if not video:
-                await update.message.reply_text(
-                    "🤷 Нет залогированных видео."
-                )
-                return
-            
-            video_id = video.video_id
-            tags = video.movement_tags if video.movement_tags else []
-            usage_count = video.usage_count
-            last_used = video.last_used_at
-            title = video.title or "—"
+    try:
+        async with async_session_factory() as session:
+            async with session.begin():
+                user = await get_or_create_user(session, telegram_id)
+                
+                result = await get_last_video_log(session, user.id)
+                if not result:
+                    await update.message.reply_text("🤷 Нет залогированных видео.")
+                    return
+                
+                video, last_log = result
+                video_id = video.video_id
+                tags = video.movement_tags if video.movement_tags else []
+                usage_count = video.usage_count
+                last_used = video.last_used_at
+                title = video.title or "—"
+                
+                # Get profile weights
+                heavy_kg = last_log.kb_heavy_kg_at_time or user.kb_heavy_kg
+                swing_kg = last_log.kb_swing_kg_at_time or user.kb_swing_kg
+                current_profile = profile_key(heavy_kg, swing_kg)
+                
+                # Session metrics
+                session_line = format_session_metrics(last_log)
+                weights_line = f"Веса (факт): база {heavy_kg} · свинг {swing_kg}  (профиль {current_profile})"
+                
+                # Aggregates
+                strain_aggs = await get_video_strain_aggregates_by_profile(session, user.id, video_id)
+                effort_aggs = await get_video_effort_aggregates_by_profile(session, user.id, video_id)
+                overall = await get_video_overall_aggregates(session, user.id, video_id)
 
-    tags_str = ", ".join(tags) if tags else "не размечено"
-    last_used_str = last_used.strftime("%d.%m %H:%M") if last_used else "—"
-    
-    await update.message.reply_text(
-        f"📹 *Последнее видео*\n\n"
-        f"ID: `{video_id}`\n"
-        f"Название: {title}\n"
-        f"🔖 Теги: {tags_str}\n"
-        f"📊 Использований: {usage_count}\n"
-        f"🕐 Последнее: {last_used_str}\n\n"
-        f"[Открыть на YouTube](https://www.youtube.com/watch?v={video_id})",
-        parse_mode="Markdown",
-    )
+        tags_str = ", ".join(tags) if tags else "не размечено"
+        last_used_str = last_used.strftime("%d.%m %H:%M") if last_used else "—"
+        
+        # Escape for HTML
+        title_safe = escape_html(title)
+        tags_safe = escape_html(tags_str)
+        
+        lines = [
+            f"📼 <b>Последнее видео</b>\n",
+            f"ID: <code>{video_id}</code>",
+            f"Название: {title_safe}",
+            f"🔖 Теги: {tags_safe}",
+            f"📊 Использований: {usage_count}",
+            f"🕐 Последнее: {last_used_str}",
+            f'<a href="https://www.youtube.com/watch?v={video_id}">Открыть на YouTube</a>\n',
+            session_line,
+            weights_line,
+        ]
+        
+        # Current profile aggregates
+        strain_by_profile = {(a.heavy_kg, a.swing_kg): a for a in strain_aggs}
+        effort_by_profile = {(a.heavy_kg, a.swing_kg): a for a in effort_aggs}
+        
+        current_strain = strain_by_profile.get((heavy_kg, swing_kg))
+        current_effort = effort_by_profile.get((heavy_kg, swing_kg))
+        
+        # Always show current profile section
+        lines.append(f"\n📊 <b>По профилю {current_profile}</b>")
+        if current_strain or current_effort:
+            if current_strain:
+                lines.append(f"strain: {current_strain.avg_value:.1f} (n={current_strain.count})")
+            if current_effort:
+                word = rpe_mean_to_words(current_effort.avg_value)
+                lines.append(f'effort: {current_effort.avg_value:.1f} — ближе к "{word}" (n={current_effort.count})')
+        else:
+            lines.append("нет данных")
+        
+        # Overall aggregates
+        if overall.strain_count > 0 or overall.rpe_count > 0:
+            lines.append(f"\n📈 <b>Общее по видео</b>")
+            if overall.avg_strain is not None and overall.strain_count > 0:
+                lines.append(f"strain: {overall.avg_strain:.1f} (n={overall.strain_count})")
+            if overall.avg_rpe is not None and overall.rpe_count > 0:
+                word = rpe_mean_to_words(overall.avg_rpe)
+                lines.append(f'effort: {overall.avg_rpe:.1f} — ближе к "{word}" (n={overall.rpe_count})')
+        
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"video_last_command error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
 # Tag toggle pattern: tag:{video_id}:{tag}

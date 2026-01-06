@@ -12,9 +12,11 @@ class MatchCandidate:
     workout_id: str
     start: datetime  # UTC-aware
     end: datetime  # UTC-aware
-    workout_type: str
+    workout_type: str  # Human-readable from _get_workout_type()
     strain: float
     duration_min: int
+    hr_avg: int | None = None
+    hr_max: int | None = None
     score: float = 0.0  # Lower = better match
 
     @classmethod
@@ -29,13 +31,20 @@ class MatchCandidate:
 
         duration_min = int((end - start).total_seconds() / 60) if start and end else 0
 
+        # Extract HR data from score object
+        score_data = workout.get("score", {})
+        hr_avg = score_data.get("average_heart_rate")
+        hr_max = score_data.get("max_heart_rate")
+
         return cls(
             workout_id=str(workout.get("id", "")),
             start=start,
             end=end,
             workout_type=_get_workout_type(workout),
-            strain=workout.get("score", {}).get("strain", 0.0),
+            strain=score_data.get("strain", 0.0),
             duration_min=duration_min,
+            hr_avg=hr_avg,
+            hr_max=hr_max,
         )
 
 
