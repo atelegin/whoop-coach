@@ -26,9 +26,9 @@ async def lifespan(app: FastAPI):
     # Set webhook in production
     if settings.is_prod and settings.TELEGRAM_WEBHOOK_URL:
         await tg_app.bot.set_webhook(settings.TELEGRAM_WEBHOOK_URL)
-        logger.info(f"Telegram webhook set to: {settings.TELEGRAM_WEBHOOK_URL}")
+        print(f"[STARTUP] Telegram webhook set to: {settings.TELEGRAM_WEBHOOK_URL}")
     else:
-        logger.info(f"Webhook not set: is_prod={settings.is_prod}, url={settings.TELEGRAM_WEBHOOK_URL}")
+        print(f"[STARTUP] Webhook not set: is_prod={settings.is_prod}, url={settings.TELEGRAM_WEBHOOK_URL}")
 
     yield
 
