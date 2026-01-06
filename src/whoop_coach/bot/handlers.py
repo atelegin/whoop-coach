@@ -56,17 +56,27 @@ async def get_whoop_client_with_refresh(
         await client.get_profile()
         return client, False
     except httpx.HTTPStatusError as e:
+        print(f"[TOKEN] Initial request failed with status {e.response.status_code}")
         if e.response.status_code != 401:
             raise
 
     # Token expired — refresh
+    print("[TOKEN] Access token expired, attempting refresh...")
     await client.close()
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
+        print("[TOKEN] No refresh token available!")
         raise ValueError("No refresh token available")
 
     client = WhoopClient()
-    new_tokens = await client.refresh_tokens(refresh_token)
+    try:
+        new_tokens = await client.refresh_tokens(refresh_token)
+        print("[TOKEN] Refresh successful, saving new tokens...")
+    except httpx.HTTPStatusError as e:
+        print(f"[TOKEN] Refresh failed with status {e.response.status_code}: {e.response.text}")
+        await client.close()
+        raise ValueError(f"Token refresh failed: {e.response.status_code}")
+    
     client.access_token = new_tokens.access_token
 
     # Save new tokens to DB
@@ -75,6 +85,7 @@ async def get_whoop_client_with_refresh(
             user = await session.get(User, user_id)
             if user:
                 user.whoop_tokens_enc = encrypt_tokens(new_tokens.to_dict())
+                print(f"[TOKEN] New tokens saved for user {user_id}")
 
     return client, True
 
