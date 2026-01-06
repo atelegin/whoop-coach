@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,6 +8,8 @@ from fastapi import FastAPI
 from whoop_coach.api.routes import router
 from whoop_coach.bot.app import create_bot
 from whoop_coach.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -23,6 +26,9 @@ async def lifespan(app: FastAPI):
     # Set webhook in production
     if settings.is_prod and settings.TELEGRAM_WEBHOOK_URL:
         await tg_app.bot.set_webhook(settings.TELEGRAM_WEBHOOK_URL)
+        logger.info(f"Telegram webhook set to: {settings.TELEGRAM_WEBHOOK_URL}")
+    else:
+        logger.info(f"Webhook not set: is_prod={settings.is_prod}, url={settings.TELEGRAM_WEBHOOK_URL}")
 
     yield
 
