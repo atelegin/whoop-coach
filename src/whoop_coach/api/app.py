@@ -32,9 +32,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
-    if settings.is_prod:
-        await tg_app.bot.delete_webhook()
+    # Cleanup (no need to delete webhook - it persists across deploys)
     await tg_app.stop()
     await tg_app.shutdown()
 
