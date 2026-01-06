@@ -30,7 +30,7 @@
 - [x] WHOOP webhook обработка
 - [x] Генерация плана на 3 дня
 - [x] Hard constraints (боль, soreness, Z4 лимиты)
-- [/] Soft scoring (benefit/cost) — базовый MVP
+- [x] Soft scoring v0.5 (fatigue, anti-repeat, leg DOMS, Z4 guardrails, diversified selection)
 
 
 ## Stage 5: YouTube пул + рекомендации

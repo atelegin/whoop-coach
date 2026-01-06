@@ -13,6 +13,7 @@ from whoop_coach.bot.handlers import (
     gear_callback,
     gear_command,
     help_command,
+    kb_swing_callback,
     kb_weight_callback,
     last_command,
     morning_command,
@@ -67,6 +68,9 @@ def create_bot() -> Application:
     )
     application.add_handler(
         CallbackQueryHandler(kb_weight_callback, pattern=r"^kb_weight:")
+    )
+    application.add_handler(
+        CallbackQueryHandler(kb_swing_callback, pattern=r"^kb_swing:")
     )
     application.add_handler(
         CallbackQueryHandler(retry_callback, pattern=r"^retry:")

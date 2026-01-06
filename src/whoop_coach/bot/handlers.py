@@ -14,6 +14,7 @@ from whoop_coach.bot.keyboards import (
     EQUIPMENT_LABELS,
     PAIN_LOCATIONS,
     equipment_keyboard,
+    gear_with_swing_keyboard,
     kb_weight_keyboard,
     pain_locations_keyboard,
     retry_keyboard,
@@ -179,13 +180,14 @@ async def gear_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with async_session_factory() as session:
         async with session.begin():
             user = await get_or_create_user(session, telegram_id)
-            current = user.equipment_profile
+            current_profile = user.equipment_profile
+            current_swing = user.kb_swing_kg
 
-    label = EQUIPMENT_LABELS[current]
+    label = EQUIPMENT_LABELS[current_profile]
     await update.message.reply_text(
-        f"🎒 *Сейчас:* {label}\n\nВыбери режим:",
+        f"🎒 *Сейчас:* {label}\n🏋️ *Свинг:* {current_swing} кг\n\nВыбери:",
         parse_mode="Markdown",
-        reply_markup=equipment_keyboard(current),
+        reply_markup=gear_with_swing_keyboard(current_profile, current_swing),
     )
 
 
@@ -210,11 +212,47 @@ async def gear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         async with session.begin():
             user = await get_or_create_user(session, telegram_id)
             user.equipment_profile = new_profile
+            current_swing = user.kb_swing_kg
 
     label = EQUIPMENT_LABELS[new_profile]
     await query.edit_message_text(
-        f"✅ Ок, режим: {label}",
-        reply_markup=equipment_keyboard(new_profile),
+        f"🎒 *Сейчас:* {label}\n🏋️ *Свинг:* {current_swing} кг\n\nВыбери:",
+        parse_mode="Markdown",
+        reply_markup=gear_with_swing_keyboard(new_profile, current_swing),
+    )
+
+
+async def kb_swing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle swing weight toggle: kb_swing:{weight}."""
+    query = update.callback_query
+    if not query or not query.data or not update.effective_user:
+        return
+
+    # Parse callback data: "kb_swing:12" or "kb_swing:20"
+    _, weight_str = query.data.split(":", 1)
+    try:
+        new_weight = int(weight_str)
+    except ValueError:
+        return
+    
+    if new_weight not in (12, 20):
+        return
+
+    await query.answer(f"Свинг: {new_weight} кг")
+
+    telegram_id = update.effective_user.id
+
+    async with async_session_factory() as session:
+        async with session.begin():
+            user = await get_or_create_user(session, telegram_id)
+            user.kb_swing_kg = new_weight
+            current_profile = user.equipment_profile
+
+    label = EQUIPMENT_LABELS[current_profile]
+    await query.edit_message_text(
+        f"🎒 *Сейчас:* {label}\n🏋️ *Свинг:* {new_weight} кг\n\nВыбери:",
+        parse_mode="Markdown",
+        reply_markup=gear_with_swing_keyboard(current_profile, new_weight),
     )
 
 
@@ -404,7 +442,7 @@ async def youtube_message_handler(
                 session.add(Video(video_id=video_id))
                 await session.flush()
 
-            # Create PendingLog
+            # Create PendingLog with KB cap snapshots
             pending_log = PendingLog(
                 user_id=user.id,
                 video_id=video_id,
@@ -412,6 +450,10 @@ async def youtube_message_handler(
                 equipment_profile_at_time=user.equipment_profile,
                 message_timestamp=message_time,
                 state=PendingLogState.PENDING,
+                # KB capability snapshots
+                kb_overhead_max_kg_at_time=user.kb_overhead_max_kg,
+                kb_heavy_kg_at_time=user.kb_heavy_kg,
+                kb_swing_kg_at_time=user.kb_swing_kg,
             )
             session.add(pending_log)
             await session.flush()

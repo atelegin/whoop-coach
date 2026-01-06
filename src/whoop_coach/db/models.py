@@ -85,6 +85,22 @@ class User(Base):
         Integer,
         nullable=True,
     )
+    # Kettlebell capabilities
+    kb_overhead_max_kg: Mapped[int] = mapped_column(
+        Integer,
+        default=12,
+        nullable=False,
+    )
+    kb_heavy_kg: Mapped[int] = mapped_column(
+        Integer,
+        default=20,
+        nullable=False,
+    )
+    kb_swing_kg: Mapped[int] = mapped_column(
+        Integer,
+        default=12,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -155,6 +171,12 @@ class Video(Base):
         JSON,
         nullable=True,
     )
+    # Movement tags for KB weight assignment (e.g. ["overhead", "swing", "pull"])
+    movement_tags: Mapped[list[str]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -214,6 +236,19 @@ class PendingLog(Base):
         Integer,
         default=0,
         nullable=False,
+    )
+    # KB capability snapshots at log time
+    kb_overhead_max_kg_at_time: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    kb_heavy_kg_at_time: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    kb_swing_kg_at_time: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

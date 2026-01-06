@@ -39,6 +39,20 @@ class ImpactLevel(str, Enum):
     LOW = "low"  # Barre, mobility, walking
 
 
+# === Modality Mapping for Soft Scoring ===
+MODALITY_MAP: dict["WorkoutType", str] = {
+    WorkoutType.RUN_Z2: "run",
+    WorkoutType.RUN_Z3: "run",
+    WorkoutType.RUN_Z4: "run",
+    WorkoutType.KETTLEBELL: "strength",
+    WorkoutType.BANDS: "strength",
+    WorkoutType.BODYWEIGHT: "strength",
+    WorkoutType.BARRE: "barre",
+    WorkoutType.MOBILITY: "mobility",
+    WorkoutType.WALKING: "walk",
+}
+
+
 @dataclass
 class WorkoutOption:
     """A training option that can be recommended."""
@@ -212,3 +226,12 @@ def get_option_by_id(option_id: str) -> WorkoutOption | None:
         if opt.id == option_id:
             return opt
     return None
+
+
+def get_modality(opt: WorkoutOption) -> str:
+    """Get modality category for soft scoring.
+    
+    Returns one of: "run", "strength", "barre", "mobility", "walk"
+    """
+    return MODALITY_MAP[opt.type]
+

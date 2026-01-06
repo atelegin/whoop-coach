@@ -38,6 +38,33 @@ def equipment_keyboard(current: EquipmentProfile) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([buttons])
 
 
+def gear_with_swing_keyboard(
+    current_profile: EquipmentProfile, current_swing_kg: int
+) -> InlineKeyboardMarkup:
+    """Build combined keyboard with equipment row + swing toggle row.
+    
+    Args:
+        current_profile: Current equipment profile
+        current_swing_kg: Current swing weight (12 or 20)
+    """
+    # Row 1: Equipment profiles
+    equip_buttons = [
+        InlineKeyboardButton(
+            text=f"✓ {EQUIPMENT_BUTTONS[p]}" if p == current_profile else EQUIPMENT_BUTTONS[p],
+            callback_data=f"gear:{p.value}",
+        )
+        for p in EquipmentProfile
+    ]
+    # Row 2: Swing toggle
+    swing_buttons = [
+        InlineKeyboardButton(
+            text=f"✓ свинг {w}" if w == current_swing_kg else f"свинг {w}",
+            callback_data=f"kb_swing:{w}",
+        )
+        for w in (12, 20)
+    ]
+    return InlineKeyboardMarkup([equip_buttons, swing_buttons])
+
 def workout_candidates_keyboard(
     candidates: list, log_id: str
 ) -> InlineKeyboardMarkup:
