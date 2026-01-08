@@ -506,6 +506,27 @@ async def youtube_message_handler(
     if not video_id:
         return  # Not a YouTube URL, ignore
 
+    logger.info(f"YouTube URL detected: video_id={video_id}, user={telegram_id}")
+
+    try:
+        await _process_youtube_url(update, context, video_id, text, telegram_id, message_time)
+    except Exception as e:
+        logger.exception(f"Error processing YouTube URL: {e}")
+        await update.message.reply_text(
+            f"❌ Ошибка при обработке видео: {type(e).__name__}"
+        )
+
+
+async def _process_youtube_url(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    video_id: str,
+    text: str,
+    telegram_id: int,
+    message_time,
+) -> None:
+    """Internal: process YouTube URL after parsing."""
+
     # Parse optional weight: "12kg" or "20kg"
     kb_weight: int | None = None
     weight_match = _WEIGHT_PATTERN.search(text)
