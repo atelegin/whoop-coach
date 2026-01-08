@@ -550,6 +550,7 @@ async def _process_youtube_url(
 
             # Upsert Video with usage tracking
             video = await upsert_video(session, video_id)
+            await session.flush()  # Ensure Video exists before FK reference
 
             # Capture KB caps for prompt
             now = datetime.now(timezone.utc)
