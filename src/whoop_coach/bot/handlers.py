@@ -512,8 +512,10 @@ async def youtube_message_handler(
         await _process_youtube_url(update, context, video_id, text, telegram_id, message_time)
     except Exception as e:
         logger.exception(f"Error processing YouTube URL: {e}")
+        # Show full error for debugging
+        error_msg = str(e)[:200] if str(e) else type(e).__name__
         await update.message.reply_text(
-            f"❌ Ошибка при обработке видео: {type(e).__name__}"
+            f"❌ Ошибка: {error_msg}"
         )
 
 
