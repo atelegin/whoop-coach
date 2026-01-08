@@ -195,19 +195,26 @@ async def whoop_webhook(
     3. Queue background processing
     4. Return 2xx immediately
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     body = await request.body()
     sig = request.headers.get("X-WHOOP-Signature", "")
     ts = request.headers.get("X-WHOOP-Signature-Timestamp", "")
     
     settings = get_settings()
     
+    logger.info(f"[WHOOP] Received webhook, body_len={len(body)}, sig={bool(sig)}, ts={bool(ts)}")
+    
     # Signature verification: skip if secret not configured
     if settings.WHOOP_WEBHOOK_SECRET:
         if sig and ts:
             if not verify_whoop_signature(body, sig, ts):
+                logger.warning("[WHOOP] Invalid signature!")
                 raise HTTPException(401, "Invalid signature")
         elif settings.is_prod:
             # Prod mode requires signature when secret is set
+            logger.warning("[WHOOP] Missing signature headers in prod!")
             raise HTTPException(401, "Missing signature headers")
     
     payload = json.loads(body)
@@ -216,11 +223,15 @@ async def whoop_webhook(
     sleep_id = payload.get("id", "")
     whoop_user_id = str(payload.get("user_id", ""))
     
+    logger.info(f"[WHOOP] event_type={event_type}, trace_id={trace_id[:8]}..., user={whoop_user_id}")
+    
     # Only handle recovery.updated
     if event_type != "recovery.updated":
+        logger.info(f"[WHOOP] Ignoring event type: {event_type}")
         return {"status": "ignored", "reason": f"event_type={event_type}"}
     
     if not trace_id or not sleep_id:
+        logger.warning("[WHOOP] Missing trace_id or sleep_id")
         return {"status": "ignored", "reason": "missing_trace_or_sleep_id"}
     
     async with async_session_factory() as session:
@@ -229,6 +240,7 @@ async def whoop_webhook(
             select(WebhookEvent).where(WebhookEvent.trace_id == trace_id)
         )
         if exists.scalar_one_or_none():
+            logger.info(f"[WHOOP] Duplicate event, trace_id={trace_id[:8]}...")
             return {"status": "duplicate"}
         
         # Find user
@@ -237,7 +249,10 @@ async def whoop_webhook(
         )
         user = user_result.scalar_one_or_none()
         if not user:
+            logger.warning(f"[WHOOP] Unknown user: whoop_user_id={whoop_user_id}")
             return {"status": "ignored", "reason": "unknown_user"}
+        
+        logger.info(f"[WHOOP] Found user: telegram_id={user.telegram_id}")
         
         # Store event
         event = WebhookEvent(
@@ -249,6 +264,8 @@ async def whoop_webhook(
         )
         session.add(event)
         await session.commit()
+        
+        logger.info(f"[WHOOP] Event stored, id={event.id}, queueing background task")
         
         # Queue background processing
         background_tasks.add_task(
