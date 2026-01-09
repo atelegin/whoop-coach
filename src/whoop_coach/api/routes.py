@@ -145,11 +145,18 @@ async def whoop_auth_callback(
                 await client.close()
 
             # Get WHOOP user ID
+            import logging
+            logger = logging.getLogger(__name__)
+            
             client_with_token = WhoopClient(access_token=token_response.access_token)
             try:
                 profile = await client_with_token.get_profile()
                 whoop_user_id = str(profile.get("user_id", ""))
-            except Exception:
+                logger.info(f"[OAuth] Profile fetched: whoop_user_id={whoop_user_id}")
+                if not whoop_user_id:
+                    logger.warning(f"[OAuth] Empty whoop_user_id from profile: {profile}")
+            except Exception as e:
+                logger.error(f"[OAuth] Failed to fetch profile: {type(e).__name__}: {e}")
                 whoop_user_id = None
             finally:
                 await client_with_token.close()
