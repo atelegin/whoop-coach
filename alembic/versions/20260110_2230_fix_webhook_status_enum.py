@@ -14,6 +14,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision: str = '3a4b5c6d7e8f'
@@ -23,26 +24,49 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. Create the enum type
-    op.execute("""
-        CREATE TYPE webhookeventstatus AS ENUM (
-            'pending', 'processing', 'pending_score', 
-            'awaiting_feedback', 'done', 'failed'
-        )
-    """)
+    conn = op.get_bind()
     
-    # 2. Convert the column from varchar to enum
-    op.execute("""
+    # Check current column type
+    result = conn.execute(text("""
+        SELECT data_type FROM information_schema.columns 
+        WHERE table_name = 'whoop_webhook_events' AND column_name = 'status'
+    """))
+    row = result.fetchone()
+    current_type = row[0] if row else None
+    
+    # If already enum (USER-DEFINED), skip migration
+    if current_type == 'USER-DEFINED':
+        print("[Migration] status column is already enum type, skipping")
+        return
+    
+    # 1. Drop the default FIRST (required before type change)
+    # Use IF EXISTS pattern via catching exception
+    try:
+        conn.execute(text("""
+            ALTER TABLE whoop_webhook_events 
+            ALTER COLUMN status DROP DEFAULT
+        """))
+    except Exception:
+        pass  # Default might already be dropped
+    
+    # 2. Create the enum type IF NOT EXISTS
+    result = conn.execute(text("""
+        SELECT 1 FROM pg_type WHERE typname = 'webhookeventstatus'
+    """))
+    if not result.fetchone():
+        conn.execute(text("""
+            CREATE TYPE webhookeventstatus AS ENUM (
+                'pending', 'processing', 'pending_score', 
+                'awaiting_feedback', 'done', 'failed'
+            )
+        """))
+    
+    # 3. Convert the column from varchar to enum
+    conn.execute(text("""
         ALTER TABLE whoop_webhook_events 
         ALTER COLUMN status TYPE webhookeventstatus 
         USING status::webhookeventstatus
-    """)
-    
-    # 3. Remove the default (it was 'pending' as string, now we set it in app)
-    op.execute("""
-        ALTER TABLE whoop_webhook_events 
-        ALTER COLUMN status DROP DEFAULT
-    """)
+    """))
 
 
 def downgrade() -> None:
@@ -60,4 +84,4 @@ def downgrade() -> None:
     """)
     
     # Drop the enum type
-    op.execute("DROP TYPE webhookeventstatus")
+    op.execute("DROP TYPE IF EXISTS webhookeventstatus")
